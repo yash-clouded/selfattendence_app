@@ -17,6 +17,7 @@ class Subject {
   Map<int, String> dayTimings; // Maps day (1-7 or 1-31) to time "HH:mm"
   List<String> holidays; // List of holiday dates in ISO8601 format
   int reminderMinutes; // How many minutes before to show reminder
+  Map<int, String> calendarEventIds; // Maps day to eventId in device calendar
 
   Subject({
     required this.id,
@@ -31,6 +32,7 @@ class Subject {
     this.dayTimings = const {},
     this.holidays = const [],
     this.reminderMinutes = 10,
+    this.calendarEventIds = const {},
   });
 
   int get attendedClasses => attendance.values.where((v) => v).length;
@@ -124,6 +126,9 @@ class Subject {
       'dayTimings': dayTimings.map((k, v) => MapEntry(k.toString(), v)),
       'holidays': holidays,
       'reminderMinutes': reminderMinutes,
+      'calendarEventIds': calendarEventIds.map(
+        (k, v) => MapEntry(k.toString(), v),
+      ),
     };
   }
 
@@ -159,6 +164,11 @@ class Subject {
       dayTimings: parsedTimings,
       holidays: List<String>.from(json['holidays'] ?? []),
       reminderMinutes: json['reminderMinutes'] ?? 10,
+      calendarEventIds:
+          (json['calendarEventIds'] as Map<String, dynamic>?)?.map(
+            (k, v) => MapEntry(int.parse(k), v.toString()),
+          ) ??
+          {},
     );
   }
 }
@@ -227,6 +237,9 @@ class AttendanceProvider with ChangeNotifier {
   }
 
   Future<void> _addToDeviceCalendar(Subject subject) async {
+    // First, remove any existing events to avoid duplicates
+    await _removeFromDeviceCalendar(subject);
+
     if (subject.dayTimings.isEmpty) return;
 
     final DeviceCalendarPlugin deviceCalendarPlugin = DeviceCalendarPlugin();
@@ -330,8 +343,53 @@ class AttendanceProvider with ChangeNotifier {
       }
 
       event.reminders = [Reminder(minutes: subject.reminderMinutes)];
-      await deviceCalendarPlugin.createOrUpdateEvent(event);
+      final result = await deviceCalendarPlugin.createOrUpdateEvent(event);
+      if (result != null && result.isSuccess && result.data != null) {
+        subject.calendarEventIds[day] = result.data!;
+      }
     }
+    _saveSubjects();
+  }
+
+  Future<void> _removeFromDeviceCalendar(Subject subject) async {
+    if (subject.calendarEventIds.isEmpty) return;
+
+    final DeviceCalendarPlugin deviceCalendarPlugin = DeviceCalendarPlugin();
+
+    // Check permissions
+    var permissionsGranted = await deviceCalendarPlugin.hasPermissions();
+    if (permissionsGranted.isSuccess && !permissionsGranted.data!) {
+      permissionsGranted = await deviceCalendarPlugin.requestPermissions();
+      if (!permissionsGranted.isSuccess || !permissionsGranted.data!) {
+        return;
+      }
+    }
+
+    // Get calendars to find the one that might contain these events
+    final calendarsResult = await deviceCalendarPlugin.retrieveCalendars();
+    if (!calendarsResult.isSuccess || calendarsResult.data!.isEmpty) return;
+
+    // Use the same logic as _addToDeviceCalendar to find the likely calendar
+    var calendar = calendarsResult.data!.firstWhere(
+      (c) => c.isDefault ?? false,
+      orElse: () => calendarsResult.data!.first,
+    );
+    if (calendar.isReadOnly == true) {
+      try {
+        calendar = calendarsResult.data!.firstWhere(
+          (c) => c.isReadOnly == false,
+        );
+      } catch (e) {
+        return;
+      }
+    }
+
+    for (var eventId in subject.calendarEventIds.values) {
+      await deviceCalendarPlugin.deleteEvent(calendar.id, eventId);
+    }
+
+    subject.calendarEventIds.clear();
+    _saveSubjects();
   }
 
   DayOfWeek? _getDayOfWeek(int day) {
@@ -382,10 +440,15 @@ class AttendanceProvider with ChangeNotifier {
     }
   }
 
-  void deleteSubject(String id) {
-    _subjects.removeWhere((s) => s.id == id);
-    _saveSubjects();
-    notifyListeners();
+  Future<void> deleteSubject(String id) async {
+    final index = _subjects.indexWhere((s) => s.id == id);
+    if (index != -1) {
+      final subject = _subjects[index];
+      await _removeFromDeviceCalendar(subject);
+      _subjects.removeAt(index);
+      _saveSubjects();
+      notifyListeners();
+    }
   }
 
   void addHoliday(String subjectId, DateTime date) {
