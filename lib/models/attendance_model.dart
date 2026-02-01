@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:device_calendar/device_calendar.dart';
+import 'package:timezone/timezone.dart' as tz;
+
 
 class Subject {
   String id;
@@ -9,9 +12,10 @@ class Subject {
   List<int> classDays; // 1 = Monday, 7 = Sunday
   Map<String, bool> attendance; 
   Map<String, String> notes; 
-  bool isWeekly; // true = Mon-Sun (1-7), false = Date of month (1-31)
+  bool isWeekly; 
   DateTime startDate;
   DateTime? endDate;
+  String? classTime; // Format "HH:mm"
 
   Subject({
     required this.id,
@@ -23,7 +27,9 @@ class Subject {
     this.isWeekly = true,
     required this.startDate,
     this.endDate,
+    this.classTime,
   });
+
 
   // ... (getters)
 
@@ -118,6 +124,7 @@ class Subject {
       'isWeekly': isWeekly,
       'startDate': startDate.toIso8601String(),
       'endDate': endDate?.toIso8601String(),
+      'classTime': classTime,
     };
   }
 
@@ -130,8 +137,9 @@ class Subject {
       attendance: Map<String, bool>.from(json['attendance'] ?? {}),
       notes: Map<String, String>.from(json['notes'] ?? {}),
       isWeekly: json['isWeekly'] ?? true,
-      startDate: json['startDate'] != null ? DateTime.parse(json['startDate']) : DateTime.now().subtract(const Duration(days: 30)), // Fallback
+      startDate: json['startDate'] != null ? DateTime.parse(json['startDate']) : DateTime.now().subtract(const Duration(days: 30)), 
       endDate: json['endDate'] != null ? DateTime.parse(json['endDate']) : null,
+      classTime: json['classTime'],
     );
   }
 
@@ -146,7 +154,7 @@ class AttendanceProvider with ChangeNotifier {
     _loadSubjects();
   }
 
-  void addSubject(String name, double target, List<int> days, {bool isWeekly = true, DateTime? startDate, DateTime? endDate}) {
+  Future<void> addSubject(String name, double target, List<int> days, {bool isWeekly = true, DateTime? startDate, DateTime? endDate, String? classTime}) async {
     final newSubject = Subject(
       id: DateTime.now().toIso8601String(),
       name: name,
@@ -157,11 +165,137 @@ class AttendanceProvider with ChangeNotifier {
       isWeekly: isWeekly,
       startDate: startDate ?? DateTime.now(),
       endDate: endDate,
+      classTime: classTime,
     );
     _subjects.add(newSubject);
     _saveSubjects();
     notifyListeners();
+    
+    // Attempt to add to Device Calendar if time is provided
+    if (classTime != null) {
+       await _addToDeviceCalendar(newSubject);
+    }
   }
+
+  Future<void> _addToDeviceCalendar(Subject subject) async {
+    final DeviceCalendarPlugin deviceCalendarPlugin = DeviceCalendarPlugin();
+    
+    // Check permissions
+    var permissionsGranted = await deviceCalendarPlugin.hasPermissions();
+    if (permissionsGranted.isSuccess && !permissionsGranted.data!) {
+      permissionsGranted = await deviceCalendarPlugin.requestPermissions();
+      if (!permissionsGranted.isSuccess || !permissionsGranted.data!) {
+        return; // Permission denied
+      }
+    }
+
+    // Get calendars
+    final calendarsResult = await deviceCalendarPlugin.retrieveCalendars();
+    if (!calendarsResult.isSuccess || calendarsResult.data!.isEmpty) return;
+    
+    // Select default or first calendar (writable)
+    var calendar = calendarsResult.data!.firstWhere((c) => c.isDefault ?? false, orElse: () => calendarsResult.data!.first);
+    // Ensure writable?
+    if (calendar.isReadOnly == true) {
+         try {
+           calendar = calendarsResult.data!.firstWhere((c) => c.isReadOnly == false);
+         } catch(e) { return; }
+    }
+
+    // Parse Time
+    if (subject.classTime == null) return;
+    final parts = subject.classTime!.split(':');
+    final hour = int.parse(parts[0]);
+    final minute = int.parse(parts[1]);
+
+    // Construct Event
+    // We need to establish the "Next" occurrence(s).
+    // If Weekly: Add event for each day in classDays.
+    
+    // For weekly, we can use RecurrenceRule.
+    // RRULE:FREQ=WEEKLY;BYDAY=MO,TU...
+    
+    // device_calendar supports recurrence.
+    
+    // We iterate through selected classDays to create potentially multiple events if they have different start times, 
+    // but here we assume same start time for all days.
+    // BUT, RRULE BYDAY needs a single start date.
+    // If "Monday and Wednesday at 10 AM", we can create one event starting on the *next* Monday (or Wednesday) and Set Recurrence.
+    
+    // Finding the first occurrence relative to StartDate
+    DateTime firstInstance = subject.startDate; 
+    // Adjust firstInstance to match the classTime
+    firstInstance = DateTime(firstInstance.year, firstInstance.month, firstInstance.day, hour, minute);
+    
+    if (firstInstance.isBefore(DateTime.now())) {
+       // If start date was in past, we still use it as anchor but maybe calendar handles it.
+       // Or we start from today.
+       // Let's stick to subject.startDate as anchor if possible, or today.
+       DateTime now = DateTime.now();
+       firstInstance = DateTime(now.year, now.month, now.day, hour, minute);
+    }
+    
+    if (subject.isWeekly) {
+         // Map int days to Recurrence Day
+         List<DayOfWeek> daysOfWeek = [];
+         Map<int, DayOfWeek> map = {
+           1: DayOfWeek.Monday, 2: DayOfWeek.Tuesday, 3: DayOfWeek.Wednesday,
+           4: DayOfWeek.Thursday, 5: DayOfWeek.Friday, 6: DayOfWeek.Saturday, 7: DayOfWeek.Sunday
+         };
+         
+         for (var d in subject.classDays) {
+           if (map.containsKey(d)) daysOfWeek.add(map[d]!);
+         }
+         
+         final recurrenceRule = RecurrenceRule(RecurrenceFrequency.Weekly, daysOfWeek: daysOfWeek);
+         
+         if (subject.endDate != null) {
+            recurrenceRule.endDate = subject.endDate;
+         }
+         
+         final event = Event(
+           calendar.id,
+           title: subject.name,
+           description: 'Class for ${subject.name}',
+           start: tz.TZDateTime.from(firstInstance, tz.local),
+           end: tz.TZDateTime.from(firstInstance.add(const Duration(minutes: 60)), tz.local), // Assume 1 hr
+           recurrenceRule: recurrenceRule,
+         );
+         
+         // 10 Min Reminder
+         event.reminders = [Reminder(minutes: 10)];
+         
+         await deviceCalendarPlugin.createOrUpdateEvent(event);
+    } else {
+        // Monthly or Specific dates logic is harder with simple RRULE without BYMONTHDAY support in plugin fully?
+        // device_calendar supports Monthly.
+        // But our "Monthly Dates" feature stores integers: 1 (1st), 15 (15th).
+        // RecurrenceRule(RecurrenceFrequency.Monthly, daysOfMonth: [1, 15]) ?
+        // Checking plugin source/docs: supports daysOfMonth.
+        
+
+        // final recurrenceRule = RecurrenceRule(RecurrenceFrequency.Monthly);
+        // recurrenceRule.daysOfMonth = daysOfMonth; // Not supported in this version
+        final recurrenceRule = null; // Fallback to single event for now
+        
+        if (subject.endDate != null && recurrenceRule != null) {
+           recurrenceRule.endDate = subject.endDate;
+        }
+
+        final event = Event(
+           calendar.id,
+           title: subject.name,
+           description: 'Class for ${subject.name}',
+           start: tz.TZDateTime.from(firstInstance, tz.local),
+           end: tz.TZDateTime.from(firstInstance.add(const Duration(minutes: 60)), tz.local),
+           recurrenceRule: recurrenceRule,
+         );
+         event.reminders = [Reminder(minutes: 10)];
+         await deviceCalendarPlugin.createOrUpdateEvent(event);
+    }
+  }
+
+
 
 
   void deleteSubject(String id) {

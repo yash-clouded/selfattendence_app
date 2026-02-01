@@ -17,8 +17,11 @@ class _AddSubjectScreenState extends State<AddSubjectScreen> {
   final List<int> _selectedDays = []; 
   bool _isWeekly = true; // Weekly vs Monthly
   bool _isTemporary = false;
-  DateTime _startDate = DateTime.now();
+  final DateTime _startDate = DateTime.now();
+  TimeOfDay? _classTime;
+
   DateTime? _endDate;
+
 
   void _submit() {
     if (_nameController.text.isEmpty) return;
@@ -28,6 +31,12 @@ class _AddSubjectScreenState extends State<AddSubjectScreen> {
         return;
     }
 
+    String? formattedTime;
+    if (_classTime != null) {
+       // HH:mm 24hr format
+       formattedTime = '${_classTime!.hour}:${_classTime!.minute}';
+    }
+
     Provider.of<AttendanceProvider>(context, listen: false).addSubject(
       _nameController.text,
       _targetAttendance,
@@ -35,9 +44,11 @@ class _AddSubjectScreenState extends State<AddSubjectScreen> {
       isWeekly: _isWeekly,
       startDate: _startDate,
       endDate: _isTemporary ? _endDate : null,
+      classTime: formattedTime,
     );
     Navigator.pop(context);
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -231,6 +242,46 @@ class _AddSubjectScreenState extends State<AddSubjectScreen> {
               ),
               child: Column(
                 children: [
+                  // Class Time
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                       const Text('Class Time', style: TextStyle(fontSize: 16)),
+                       GestureDetector(
+                         onTap: () async {
+                           final TimeOfDay? picked = await showTimePicker(
+                             context: context,
+                             initialTime: TimeOfDay.now(),
+                             builder: (context, child) {
+                               return Theme(
+                                 data: ThemeData.dark().copyWith(
+                                    colorScheme: const ColorScheme.dark(primary: Color(0xFF0A84FF)),
+                                 ),
+                                 child: child!,
+                               );
+                             }
+                           );
+                           if (picked != null) {
+                             setState(() {
+                               _classTime = picked;
+                             });
+                           }
+                         },
+                         child: Container(
+                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                           decoration: BoxDecoration(
+                             color: const Color(0xFF2C2C2E),
+                             borderRadius: BorderRadius.circular(8),
+                           ),
+                           child: Text(
+                             _classTime != null ? _classTime!.format(context) : 'Select Time',
+                             style: const TextStyle(color: Color(0xFF0A84FF), fontWeight: FontWeight.bold),
+                           ),
+                         ),
+                       )
+                    ],
+                  ),
+                  const Divider(color: Colors.grey),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -240,16 +291,18 @@ class _AddSubjectScreenState extends State<AddSubjectScreen> {
                         onChanged: (val) {
                           setState(() {
                              _isTemporary = val;
-                             if (!val) _endDate = null;
-                             else _endDate = DateTime.now().add(const Duration(days: 30));
+                             if (!val) {
+                               _endDate = null;
+                             } else {
+                               _endDate = DateTime.now().add(const Duration(days: 30));
+                             }
                           });
                         }
                       )
                     ],
                   ),
                   if (_isTemporary) ...[
-                     const Divider(color: Colors.grey),
-                     const SizedBox(height: 8),
+                     const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Divider(color: Colors.grey)),
                      Row(
                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                        children: [
@@ -284,6 +337,7 @@ class _AddSubjectScreenState extends State<AddSubjectScreen> {
                 ],
               ),
             ),
+
 
             const SizedBox(height: 30),
             SizedBox(

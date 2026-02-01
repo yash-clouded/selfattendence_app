@@ -83,34 +83,13 @@ class _SubjectDetailsScreenState extends State<SubjectDetailsScreen> {
                     style: TextStyle(color: Colors.grey[500], fontSize: 16),
                   ),
                   
-                  if (subject.currentStreak > 0) ...[
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                           colors: [Color(0xFFFF9500), Color(0xFFFFCC00)],
-                        ),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.local_fire_department, color: Colors.white),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${subject.currentStreak} Day Streak!',
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                          )
-                        ],
-                      ),
-                    )
-                  ]
+
 
                 ],
               ),
             ),
 
+            // Advice Card
             // Advice Card
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -122,19 +101,44 @@ class _SubjectDetailsScreenState extends State<SubjectDetailsScreen> {
               ),
               child: Row(
                 children: [
-                   const Icon(CupertinoIcons.graph_circle, color: Colors.white),
-                   const SizedBox(width: 12),
+                   // Icon based on status
+                   if (subject.currentStreak > 0)
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: const BoxDecoration(
+                           gradient: LinearGradient(colors: [Color(0xFFFF9500), Color(0xFFFFCC00)]),
+                           shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.local_fire_department, color: Colors.white, size: 20),
+                      )
+                   else
+                      const Icon(CupertinoIcons.graph_circle, color: Colors.white, size: 28),
+
+                   const SizedBox(width: 16),
+                   
                    Expanded(
-                     child: Text(
-                       toAttend > 0 
-                         ? 'Attend next $toAttend classes to reach target'
-                         : 'On track! You can bunk $toBunk classes.',
-                       style: const TextStyle(color: Colors.white, fontSize: 15),
+                     child: Column(
+                       crossAxisAlignment: CrossAxisAlignment.start,
+                       children: [
+                         if (subject.currentStreak > 0)
+                            Text(
+                              '${subject.currentStreak} Day Streak!',
+                              style: const TextStyle(color: Color(0xFFFFCC00), fontWeight: FontWeight.bold, fontSize: 16),
+                            ),
+                         if (subject.currentStreak > 0) const SizedBox(height: 4),
+                         Text(
+                           toAttend > 0 
+                             ? 'Attend next $toAttend classes to reach target.'
+                             : 'On track! You can bunk $toBunk classes.',
+                           style: const TextStyle(color: Colors.white, fontSize: 15),
+                         ),
+                       ],
                      ),
                    ),
                 ],
               ),
             ),
+
 
             const SizedBox(height: 24),
 
