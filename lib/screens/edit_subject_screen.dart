@@ -4,23 +4,64 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../models/attendance_model.dart';
 
-class AddSubjectScreen extends StatefulWidget {
-  const AddSubjectScreen({super.key});
+class EditSubjectScreen extends StatefulWidget {
+  final String subjectId;
+
+  const EditSubjectScreen({super.key, required this.subjectId});
 
   @override
-  State<AddSubjectScreen> createState() => _AddSubjectScreenState();
+  State<EditSubjectScreen> createState() => _EditSubjectScreenState();
 }
 
-class _AddSubjectScreenState extends State<AddSubjectScreen> {
-  final TextEditingController _nameController = TextEditingController();
-  double _targetAttendance = 75.0;
-  final List<int> _selectedDays = [];
-  bool _isWeekly = true; // Weekly vs Monthly
-  bool _isTemporary = false;
-  final DateTime _startDate = DateTime.now();
-  DateTime? _endDate;
-  final Map<int, TimeOfDay> _dayTimes = {}; // Per-day times
-  int _reminderMinutes = 10;
+class _EditSubjectScreenState extends State<EditSubjectScreen> {
+  late TextEditingController _nameController;
+  late double _targetAttendance;
+  late List<int> _selectedDays;
+  late bool _isWeekly;
+  late bool _isTemporary;
+  late DateTime _startDate;
+  late DateTime? _endDate;
+  late Map<int, TimeOfDay> _dayTimes; // Per-day times
+  late int _reminderMinutes;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Load existing subject data
+    final provider = Provider.of<AttendanceProvider>(context, listen: false);
+    final subject = provider.subjects.firstWhere(
+      (s) => s.id == widget.subjectId,
+    );
+
+    _nameController = TextEditingController(text: subject.name);
+    _targetAttendance = subject.targetAttendance;
+    _selectedDays = List.from(subject.classDays);
+    _isWeekly = subject.isWeekly;
+    _startDate = subject.startDate;
+    _endDate = subject.endDate;
+    _isTemporary = subject.endDate != null;
+    _reminderMinutes = subject.reminderMinutes;
+
+    // Convert dayTimings string map to TimeOfDay map
+    _dayTimes = {};
+    for (var entry in subject.dayTimings.entries) {
+      final parts = entry.value.split(':');
+      if (parts.length == 2) {
+        final hour = int.tryParse(parts[0]);
+        final minute = int.tryParse(parts[1]);
+        if (hour != null && minute != null) {
+          _dayTimes[entry.key] = TimeOfDay(hour: hour, minute: minute);
+        }
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
 
   void _submit() {
     if (_nameController.text.isEmpty) return;
@@ -32,23 +73,28 @@ class _AddSubjectScreenState extends State<AddSubjectScreen> {
     }
 
     // Create dayTimings map
-    Map<int, String> dayTimings = {};
-    for (var entry in _dayTimes.entries) {
-      final time = entry.value;
-      dayTimings[entry.key] =
-          '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    Map<int, String>? dayTimings;
+    if (_dayTimes.isNotEmpty) {
+      dayTimings = {};
+      for (var entry in _dayTimes.entries) {
+        final time = entry.value;
+        dayTimings[entry.key] =
+            '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+      }
     }
 
-    Provider.of<AttendanceProvider>(context, listen: false).addSubject(
-      _nameController.text,
-      _targetAttendance,
-      _selectedDays,
+    Provider.of<AttendanceProvider>(context, listen: false).updateSubject(
+      widget.subjectId,
+      name: _nameController.text,
+      targetAttendance: _targetAttendance,
+      classDays: _selectedDays,
       isWeekly: _isWeekly,
       startDate: _startDate,
       endDate: _isTemporary ? _endDate : null,
       dayTimings: dayTimings,
       reminderMinutes: _reminderMinutes,
     );
+
     Navigator.pop(context);
   }
 
@@ -57,7 +103,7 @@ class _AddSubjectScreenState extends State<AddSubjectScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text('New Subject', style: TextStyle(fontSize: 18)),
+        title: const Text('Edit Subject', style: TextStyle(fontSize: 18)),
         centerTitle: true,
         backgroundColor: Colors.black,
         leading: GestureDetector(
@@ -416,7 +462,7 @@ class _AddSubjectScreenState extends State<AddSubjectScreen> {
                   foregroundColor: Colors.white,
                 ),
                 child: const Text(
-                  'Add Subject',
+                  'Save Changes',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ),

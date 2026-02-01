@@ -4,18 +4,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_calendar/device_calendar.dart';
 import 'package:timezone/timezone.dart' as tz;
 
-
 class Subject {
   String id;
   String name;
   double targetAttendance; // e.g., 75.0
   List<int> classDays; // 1 = Monday, 7 = Sunday
-  Map<String, bool> attendance; 
-  Map<String, String> notes; 
-  bool isWeekly; 
+  Map<String, bool> attendance;
+  Map<String, String> notes;
+  bool isWeekly;
   DateTime startDate;
   DateTime? endDate;
-  String? classTime; // Format "HH:mm"
+  Map<int, String> dayTimings; // Maps day (1-7 or 1-31) to time "HH:mm"
+  List<String> holidays; // List of holiday dates in ISO8601 format
+  int reminderMinutes; // How many minutes before to show reminder
 
   Subject({
     required this.id,
@@ -27,15 +28,14 @@ class Subject {
     this.isWeekly = true,
     required this.startDate,
     this.endDate,
-    this.classTime,
+    this.dayTimings = const {},
+    this.holidays = const [],
+    this.reminderMinutes = 10,
   });
-
-
-  // ... (getters)
 
   int get attendedClasses => attendance.values.where((v) => v).length;
   int get totalClasses => attendance.length;
-  
+
   double get currentPercentage {
     if (totalClasses == 0) return 100.0;
     return (attendedClasses / totalClasses) * 100;
@@ -49,30 +49,31 @@ class Subject {
     if (currentPercentage >= targetAttendance) return 0;
     double numerator = (currentTotal * target) - currentAttended;
     double denominator = 1.0 - target;
-    if (denominator == 0) return 0; 
+    if (denominator == 0) return 0;
     double result = numerator / denominator;
     return result.ceil();
   }
-  
-  int get classesToBunk {
-      if (currentPercentage < targetAttendance) return 0;
-      double target = targetAttendance / 100.0;
-      if (target == 0) return 999; 
 
-      double result = (attendedClasses - (totalClasses * target)) / target;
-      return result.floor();
+  int get classesToBunk {
+    if (currentPercentage < targetAttendance) return 0;
+    double target = targetAttendance / 100.0;
+    if (target == 0) return 999;
+
+    double result = (attendedClasses - (totalClasses * target)) / target;
+    return result.floor();
   }
 
   int get currentStreak {
     if (attendance.isEmpty) return 0;
-    
+
     int streak = 0;
     DateTime current = DateTime.now();
     current = DateTime(current.year, current.month, current.day);
-    
+
     // Limit check to start date or 2 years
-    DateTime checkLimit = startDate.isAfter(current.subtract(const Duration(days: 730))) 
-        ? startDate 
+    DateTime checkLimit =
+        startDate.isAfter(current.subtract(const Duration(days: 730)))
+        ? startDate
         : current.subtract(const Duration(days: 730));
 
     // Normalize checkLimit
@@ -85,24 +86,20 @@ class Subject {
       } else {
         isClassDay = classDays.contains(current.day);
       }
-      
-      // If we are past the end date (if set), technically it's not a class day effectively for streak? 
-      // But we iterate backwards from Today. If today > endDate, then streak might be frozen?
-      // Let's simple ignore endDate for streak calculation or assume current date is valid.
 
       if (isClassDay) {
-         String dateKey = current.toIso8601String().split('T')[0];
-         bool? status = attendance[dateKey];
-         
-         if (status == true) {
-           streak++;
-         } else if (status == false) {
-           return streak; 
-         } else {
-           if (!isSameDay(current, DateTime.now())) {
-             return streak;
-           }
-         }
+        String dateKey = current.toIso8601String().split('T')[0];
+        bool? status = attendance[dateKey];
+
+        if (status == true) {
+          streak++;
+        } else if (status == false) {
+          return streak;
+        } else {
+          if (!isSameDay(current, DateTime.now())) {
+            return streak;
+          }
+        }
       }
       current = current.subtract(const Duration(days: 1));
     }
@@ -124,11 +121,29 @@ class Subject {
       'isWeekly': isWeekly,
       'startDate': startDate.toIso8601String(),
       'endDate': endDate?.toIso8601String(),
-      'classTime': classTime,
+      'dayTimings': dayTimings.map((k, v) => MapEntry(k.toString(), v)),
+      'holidays': holidays,
+      'reminderMinutes': reminderMinutes,
     };
   }
 
   factory Subject.fromJson(Map<String, dynamic> json) {
+    // Handle migration from old classTime format
+    Map<int, String> parsedTimings = {};
+    if (json['dayTimings'] != null) {
+      final timingsMap = json['dayTimings'] as Map<String, dynamic>;
+      parsedTimings = timingsMap.map(
+        (k, v) => MapEntry(int.parse(k), v.toString()),
+      );
+    } else if (json['classTime'] != null) {
+      // Migration: if old classTime exists, apply to all class days
+      final oldTime = json['classTime'] as String;
+      final days = List<int>.from(json['classDays'] ?? []);
+      for (var day in days) {
+        parsedTimings[day] = oldTime;
+      }
+    }
+
     return Subject(
       id: json['id'],
       name: json['name'],
@@ -137,24 +152,56 @@ class Subject {
       attendance: Map<String, bool>.from(json['attendance'] ?? {}),
       notes: Map<String, String>.from(json['notes'] ?? {}),
       isWeekly: json['isWeekly'] ?? true,
-      startDate: json['startDate'] != null ? DateTime.parse(json['startDate']) : DateTime.now().subtract(const Duration(days: 30)), 
+      startDate: json['startDate'] != null
+          ? DateTime.parse(json['startDate'])
+          : DateTime.now().subtract(const Duration(days: 30)),
       endDate: json['endDate'] != null ? DateTime.parse(json['endDate']) : null,
-      classTime: json['classTime'],
+      dayTimings: parsedTimings,
+      holidays: List<String>.from(json['holidays'] ?? []),
+      reminderMinutes: json['reminderMinutes'] ?? 10,
     );
   }
-
 }
 
 class AttendanceProvider with ChangeNotifier {
   List<Subject> _subjects = [];
-  
+  String? _userName;
+
   List<Subject> get subjects => _subjects;
+  String? get userName => _userName;
 
   AttendanceProvider() {
-    _loadSubjects();
+    _loadData();
   }
 
-  Future<void> addSubject(String name, double target, List<int> days, {bool isWeekly = true, DateTime? startDate, DateTime? endDate, String? classTime}) async {
+  Future<void> _loadData() async {
+    await _loadSubjects();
+    await _loadUserName();
+  }
+
+  Future<void> _loadUserName() async {
+    final prefs = await SharedPreferences.getInstance();
+    _userName = prefs.getString('user_name');
+    notifyListeners();
+  }
+
+  Future<void> setUserName(String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_name', name);
+    _userName = name;
+    notifyListeners();
+  }
+
+  Future<void> addSubject(
+    String name,
+    double target,
+    List<int> days, {
+    bool isWeekly = true,
+    DateTime? startDate,
+    DateTime? endDate,
+    Map<int, String>? dayTimings,
+    int? reminderMinutes,
+  }) async {
     final newSubject = Subject(
       id: DateTime.now().toIso8601String(),
       name: name,
@@ -165,21 +212,25 @@ class AttendanceProvider with ChangeNotifier {
       isWeekly: isWeekly,
       startDate: startDate ?? DateTime.now(),
       endDate: endDate,
-      classTime: classTime,
+      dayTimings: dayTimings ?? {},
+      holidays: [],
+      reminderMinutes: reminderMinutes ?? 10,
     );
     _subjects.add(newSubject);
     _saveSubjects();
     notifyListeners();
-    
-    // Attempt to add to Device Calendar if time is provided
-    if (classTime != null) {
-       await _addToDeviceCalendar(newSubject);
+
+    // Attempt to add to Device Calendar if timings provided
+    if (dayTimings != null && dayTimings.isNotEmpty) {
+      await _addToDeviceCalendar(newSubject);
     }
   }
 
   Future<void> _addToDeviceCalendar(Subject subject) async {
+    if (subject.dayTimings.isEmpty) return;
+
     final DeviceCalendarPlugin deviceCalendarPlugin = DeviceCalendarPlugin();
-    
+
     // Check permissions
     var permissionsGranted = await deviceCalendarPlugin.hasPermissions();
     if (permissionsGranted.isSuccess && !permissionsGranted.data!) {
@@ -192,114 +243,171 @@ class AttendanceProvider with ChangeNotifier {
     // Get calendars
     final calendarsResult = await deviceCalendarPlugin.retrieveCalendars();
     if (!calendarsResult.isSuccess || calendarsResult.data!.isEmpty) return;
-    
+
     // Select default or first calendar (writable)
-    var calendar = calendarsResult.data!.firstWhere((c) => c.isDefault ?? false, orElse: () => calendarsResult.data!.first);
-    // Ensure writable?
+    var calendar = calendarsResult.data!.firstWhere(
+      (c) => c.isDefault ?? false,
+      orElse: () => calendarsResult.data!.first,
+    );
     if (calendar.isReadOnly == true) {
-         try {
-           calendar = calendarsResult.data!.firstWhere((c) => c.isReadOnly == false);
-         } catch(e) { return; }
+      try {
+        calendar = calendarsResult.data!.firstWhere(
+          (c) => c.isReadOnly == false,
+        );
+      } catch (e) {
+        return;
+      }
     }
 
-    // Parse Time
-    if (subject.classTime == null) return;
-    final parts = subject.classTime!.split(':');
-    final hour = int.parse(parts[0]);
-    final minute = int.parse(parts[1]);
+    // Create events for each day with timing
+    for (var entry in subject.dayTimings.entries) {
+      final day = entry.key; // 1 = Mon, 7 = Sun
+      final timeStr = entry.value;
 
-    // Construct Event
-    // We need to establish the "Next" occurrence(s).
-    // If Weekly: Add event for each day in classDays.
-    
-    // For weekly, we can use RecurrenceRule.
-    // RRULE:FREQ=WEEKLY;BYDAY=MO,TU...
-    
-    // device_calendar supports recurrence.
-    
-    // We iterate through selected classDays to create potentially multiple events if they have different start times, 
-    // but here we assume same start time for all days.
-    // BUT, RRULE BYDAY needs a single start date.
-    // If "Monday and Wednesday at 10 AM", we can create one event starting on the *next* Monday (or Wednesday) and Set Recurrence.
-    
-    // Finding the first occurrence relative to StartDate
-    DateTime firstInstance = subject.startDate; 
-    // Adjust firstInstance to match the classTime
-    firstInstance = DateTime(firstInstance.year, firstInstance.month, firstInstance.day, hour, minute);
-    
-    if (firstInstance.isBefore(DateTime.now())) {
-       // If start date was in past, we still use it as anchor but maybe calendar handles it.
-       // Or we start from today.
-       // Let's stick to subject.startDate as anchor if possible, or today.
-       DateTime now = DateTime.now();
-       firstInstance = DateTime(now.year, now.month, now.day, hour, minute);
-    }
-    
-    if (subject.isWeekly) {
-         // Map int days to Recurrence Day
-         List<DayOfWeek> daysOfWeek = [];
-         Map<int, DayOfWeek> map = {
-           1: DayOfWeek.Monday, 2: DayOfWeek.Tuesday, 3: DayOfWeek.Wednesday,
-           4: DayOfWeek.Thursday, 5: DayOfWeek.Friday, 6: DayOfWeek.Saturday, 7: DayOfWeek.Sunday
-         };
-         
-         for (var d in subject.classDays) {
-           if (map.containsKey(d)) daysOfWeek.add(map[d]!);
-         }
-         
-         final recurrenceRule = RecurrenceRule(RecurrenceFrequency.Weekly, daysOfWeek: daysOfWeek);
-         
-         if (subject.endDate != null) {
-            recurrenceRule.endDate = subject.endDate;
-         }
-         
-         final event = Event(
-           calendar.id,
-           title: subject.name,
-           description: 'Class for ${subject.name}',
-           start: tz.TZDateTime.from(firstInstance, tz.local),
-           end: tz.TZDateTime.from(firstInstance.add(const Duration(minutes: 60)), tz.local), // Assume 1 hr
-           recurrenceRule: recurrenceRule,
-         );
-         
-         // 10 Min Reminder
-         event.reminders = [Reminder(minutes: 10)];
-         
-         await deviceCalendarPlugin.createOrUpdateEvent(event);
-    } else {
-        // Monthly or Specific dates logic is harder with simple RRULE without BYMONTHDAY support in plugin fully?
-        // device_calendar supports Monthly.
-        // But our "Monthly Dates" feature stores integers: 1 (1st), 15 (15th).
-        // RecurrenceRule(RecurrenceFrequency.Monthly, daysOfMonth: [1, 15]) ?
-        // Checking plugin source/docs: supports daysOfMonth.
-        
+      final parts = timeStr.split(':');
+      if (parts.length != 2) continue;
+      final hour = int.tryParse(parts[0]);
+      final minute = int.tryParse(parts[1]);
+      if (hour == null || minute == null) continue;
 
-        // final recurrenceRule = RecurrenceRule(RecurrenceFrequency.Monthly);
-        // recurrenceRule.daysOfMonth = daysOfMonth; // Not supported in this version
-        final recurrenceRule = null; // Fallback to single event for now
-        
-        if (subject.endDate != null && recurrenceRule != null) {
-           recurrenceRule.endDate = subject.endDate;
+      // Find first occurrence on the correct day of week
+      DateTime firstInstance = subject.startDate;
+
+      if (subject.isWeekly) {
+        // Adjust firstInstance to the next occurrence of 'day' (1=Mon)
+        int currentWeekday = firstInstance.weekday;
+        int daysToAdd = (day - currentWeekday + 7) % 7;
+        firstInstance = firstInstance.add(Duration(days: daysToAdd));
+      }
+
+      firstInstance = DateTime(
+        firstInstance.year,
+        firstInstance.month,
+        firstInstance.day,
+        hour,
+        minute,
+      );
+
+      // If that first instance is in the past, move it forward by 1 week
+      if (firstInstance.isBefore(DateTime.now())) {
+        if (subject.isWeekly) {
+          firstInstance = firstInstance.add(const Duration(days: 7));
+        } else {
+          // Monthly case - move to next month same date
+          firstInstance = DateTime(
+            firstInstance.year,
+            firstInstance.month + 1,
+            firstInstance.day,
+            hour,
+            minute,
+          );
         }
+      }
 
-        final event = Event(
-           calendar.id,
-           title: subject.name,
-           description: 'Class for ${subject.name}',
-           start: tz.TZDateTime.from(firstInstance, tz.local),
-           end: tz.TZDateTime.from(firstInstance.add(const Duration(minutes: 60)), tz.local),
-           recurrenceRule: recurrenceRule,
-         );
-         event.reminders = [Reminder(minutes: 10)];
-         await deviceCalendarPlugin.createOrUpdateEvent(event);
+      final event = Event(
+        calendar.id,
+        title: subject.name,
+        description: 'Class for ${subject.name}',
+        start: tz.TZDateTime.from(firstInstance, tz.local),
+        end: tz.TZDateTime.from(
+          firstInstance.add(const Duration(minutes: 60)),
+          tz.local,
+        ),
+      );
+
+      if (subject.isWeekly) {
+        final dayOfWeek = _getDayOfWeek(day);
+        if (dayOfWeek != null) {
+          final recurrenceRule = RecurrenceRule(
+            RecurrenceFrequency.Weekly,
+            daysOfWeek: [dayOfWeek],
+          );
+          if (subject.endDate != null) {
+            recurrenceRule.endDate = subject.endDate;
+          }
+          event.recurrenceRule = recurrenceRule;
+        }
+      }
+
+      event.reminders = [Reminder(minutes: subject.reminderMinutes)];
+      await deviceCalendarPlugin.createOrUpdateEvent(event);
     }
   }
 
+  DayOfWeek? _getDayOfWeek(int day) {
+    const map = {
+      1: DayOfWeek.Monday,
+      2: DayOfWeek.Tuesday,
+      3: DayOfWeek.Wednesday,
+      4: DayOfWeek.Thursday,
+      5: DayOfWeek.Friday,
+      6: DayOfWeek.Saturday,
+      7: DayOfWeek.Sunday,
+    };
+    return map[day];
+  }
 
+  Future<void> updateSubject(
+    String id, {
+    String? name,
+    double? targetAttendance,
+    List<int>? classDays,
+    bool? isWeekly,
+    DateTime? startDate,
+    DateTime? endDate,
+    Map<int, String>? dayTimings,
+    int? reminderMinutes,
+  }) async {
+    final index = _subjects.indexWhere((s) => s.id == id);
+    if (index == -1) return;
 
+    final subject = _subjects[index];
+
+    // Update fields
+    if (name != null) subject.name = name;
+    if (targetAttendance != null) subject.targetAttendance = targetAttendance;
+    if (classDays != null) subject.classDays = classDays;
+    if (isWeekly != null) subject.isWeekly = isWeekly;
+    if (startDate != null) subject.startDate = startDate;
+    subject.endDate = endDate; // Allow null to clear
+    if (dayTimings != null) subject.dayTimings = dayTimings;
+    if (reminderMinutes != null) subject.reminderMinutes = reminderMinutes;
+
+    _saveSubjects();
+    notifyListeners();
+
+    // Update calendar events if timings changed
+    if (dayTimings != null && dayTimings.isNotEmpty) {
+      await _addToDeviceCalendar(subject);
+    }
+  }
 
   void deleteSubject(String id) {
     _subjects.removeWhere((s) => s.id == id);
+    _saveSubjects();
+    notifyListeners();
+  }
+
+  void addHoliday(String subjectId, DateTime date) {
+    final index = _subjects.indexWhere((s) => s.id == subjectId);
+    if (index == -1) return;
+
+    final dateKey = date.toIso8601String().split('T')[0];
+    if (!_subjects[index].holidays.contains(dateKey)) {
+      _subjects[index].holidays = [..._subjects[index].holidays, dateKey];
+      _saveSubjects();
+      notifyListeners();
+    }
+  }
+
+  void removeHoliday(String subjectId, DateTime date) {
+    final index = _subjects.indexWhere((s) => s.id == subjectId);
+    if (index == -1) return;
+
+    final dateKey = date.toIso8601String().split('T')[0];
+    _subjects[index].holidays = _subjects[index].holidays
+        .where((h) => h != dateKey)
+        .toList();
     _saveSubjects();
     notifyListeners();
   }
@@ -325,13 +433,12 @@ class AttendanceProvider with ChangeNotifier {
       if (note.isEmpty) {
         _subjects[subjectIndex].notes.remove(dateKey);
       } else {
-         _subjects[subjectIndex].notes[dateKey] = note;
+        _subjects[subjectIndex].notes[dateKey] = note;
       }
       _saveSubjects();
       notifyListeners();
     }
   }
-
 
   Future<void> _loadSubjects() async {
     final prefs = await SharedPreferences.getInstance();
@@ -345,7 +452,9 @@ class AttendanceProvider with ChangeNotifier {
 
   Future<void> _saveSubjects() async {
     final prefs = await SharedPreferences.getInstance();
-    final String encoded = jsonEncode(_subjects.map((s) => s.toJson()).toList());
+    final String encoded = jsonEncode(
+      _subjects.map((s) => s.toJson()).toList(),
+    );
     prefs.setString('subjects', encoded);
   }
 }
