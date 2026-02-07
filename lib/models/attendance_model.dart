@@ -1,8 +1,12 @@
 import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_calendar/device_calendar.dart';
 import 'package:timezone/timezone.dart' as tz;
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 class Subject {
   String id;
@@ -173,15 +177,180 @@ class Subject {
   }
 }
 
-class AttendanceProvider with ChangeNotifier {
+class AttendanceProvider extends ChangeNotifier {
   List<Subject> _subjects = [];
   String? _userName;
+  final GoogleSignIn _googleSignIn = GoogleSignIn();
 
   List<Subject> get subjects => _subjects;
   String? get userName => _userName;
+  User? get currentUser => FirebaseAuth.instance.currentUser;
+  bool get isAnonymous => currentUser?.isAnonymous ?? true;
 
   AttendanceProvider() {
-    _loadData();
+    _initializeFirebaseAndLoad();
+  }
+
+  Future<void> _initializeFirebaseAndLoad() async {
+    try {
+      // 1. Load local data immediately for UI
+      await _loadData();
+
+      // 2. Auth state listener
+      FirebaseAuth.instance.authStateChanges().listen((user) {
+        if (user != null) {
+          _syncWithFirestore();
+          _listenToFirestore();
+        }
+        notifyListeners();
+      });
+
+      // 3. Initial anonymous sign in if no user
+      if (FirebaseAuth.instance.currentUser == null) {
+        await FirebaseAuth.instance.signInAnonymously();
+      }
+    } catch (e) {
+      debugPrint("Firebase init error: $e");
+    }
+  }
+
+  Future<void> signInWithGoogle() async {
+    try {
+      debugPrint("Starting Google Sign-In process...");
+      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+
+      if (googleUser == null) {
+        debugPrint(
+          "Google Sign-In aborted by user or failed (googleUser is null)",
+        );
+        return;
+      }
+      debugPrint("Google Sign-In account obtained: ${googleUser.email}");
+
+      final GoogleSignInAuthentication googleAuth =
+          await googleUser.authentication;
+      final AuthCredential credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      await FirebaseAuth.instance.signInWithCredential(credential);
+
+      debugPrint(
+        "Firebase sign-in successful: ${FirebaseAuth.instance.currentUser?.uid}",
+      );
+
+      // CRITICAL: Sync with Firestore FIRST to pull remote data
+      // before we ever attempt to save anything.
+      await _syncWithFirestore();
+      debugPrint("Post-sign-in sync complete. User name: $_userName");
+      notifyListeners();
+    } catch (e) {
+      debugPrint("Google Sign-In Error: $e");
+    }
+  }
+
+  Future<void> signOut() async {
+    await FirebaseAuth.instance.signOut();
+    await _googleSignIn.signOut();
+    _subjects = [];
+    _userName = null;
+    await _saveLocalData();
+    notifyListeners();
+  }
+
+  void _listenToFirestore() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .snapshots()
+        .listen((snapshot) {
+          debugPrint("Firestore snapshot received. Exists: ${snapshot.exists}");
+          if (snapshot.exists) {
+            final data = snapshot.data();
+            if (data != null) {
+              if (data.containsKey('user_name')) {
+                _userName = data['user_name'];
+                debugPrint("Updated user name from Firestore: $_userName");
+              }
+              if (data.containsKey('subjects')) {
+                final List<dynamic> subjectsData = data['subjects'];
+                _subjects = subjectsData
+                    .map((s) => Subject.fromJson(s))
+                    .toList();
+                debugPrint(
+                  "Updated ${_subjects.length} subjects from Firestore",
+                );
+              }
+              notifyListeners();
+              _saveLocalData(); // Keep local in sync
+            }
+          }
+        });
+  }
+
+  Future<void> _syncWithFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    debugPrint("Fetching document for user: ${user.uid}");
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
+
+    debugPrint("Document exists: ${doc.exists}");
+    if (doc.exists) {
+      // Remote data exists, merge or overwrite
+      final data = doc.data()!;
+      _userName = data['user_name'] ?? _userName;
+
+      final List<dynamic> remoteSubjectsJson = data['subjects'] ?? [];
+      final remoteSubjects = remoteSubjectsJson
+          .map((s) => Subject.fromJson(s))
+          .toList();
+
+      // Simple merge: if local is empty, use remote.
+      // In a real app, you'd merge based on timestamps.
+      if (_subjects.isEmpty) {
+        _subjects = remoteSubjects;
+      } else {
+        // If local has data, prefer local but maybe add missing ones from remote
+        for (var remote in remoteSubjects) {
+          if (!_subjects.any((local) => local.id == remote.id)) {
+            _subjects.add(remote);
+          }
+        }
+      }
+    }
+
+    // Always push current state to cloud after sync/merge
+    await _saveToFirestore();
+    notifyListeners();
+  }
+
+  Future<void> _saveToFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+      'user_name': _userName,
+      'subjects': _subjects.map((s) => s.toJson()).toList(),
+      'last_updated': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    debugPrint("Data successfully pushed to Firebase Cloud.");
+  }
+
+  Future<void> _saveLocalData() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_name', _userName ?? "");
+    final String encoded = jsonEncode(
+      _subjects.map((s) => s.toJson()).toList(),
+    );
+    await prefs.setString('subjects', encoded);
   }
 
   Future<void> _loadData() async {
@@ -199,6 +368,7 @@ class AttendanceProvider with ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('user_name', name);
     _userName = name;
+    await _saveToFirestore();
     notifyListeners();
   }
 
@@ -342,7 +512,10 @@ class AttendanceProvider with ChangeNotifier {
         }
       }
 
-      event.reminders = [Reminder(minutes: subject.reminderMinutes)];
+      if (subject.reminderMinutes >= 0) {
+        event.reminders = [Reminder(minutes: subject.reminderMinutes)];
+      }
+
       final result = await deviceCalendarPlugin.createOrUpdateEvent(event);
       if (result != null && result.isSuccess && result.data != null) {
         subject.calendarEventIds[day] = result.data!;
@@ -513,11 +686,71 @@ class AttendanceProvider with ChangeNotifier {
     }
   }
 
+  // --- Share Timetable Feature ---
+
+  Future<String> generateShareCode() async {
+    final code = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000))
+        .toString();
+
+    // Preparation: Filter subjects to only include schedule data (no attendance/notes)
+    final sharedData = _subjects
+        .map(
+          (s) => {
+            'name': s.name,
+            'targetAttendance': s.targetAttendance,
+            'classDays': s.classDays,
+            'isWeekly': s.isWeekly,
+            'dayTimings': s.dayTimings,
+            'reminderMinutes': s.reminderMinutes,
+          },
+        )
+        .toList();
+
+    await FirebaseFirestore.instance
+        .collection('shared_timetables')
+        .doc(code)
+        .set({
+          'subjects': sharedData,
+          'createdBy': currentUser?.uid,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+
+    return code;
+  }
+
+  Future<bool> importByShareCode(String code) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('shared_timetables')
+          .doc(code)
+          .get();
+      if (!doc.exists) return false;
+
+      final data = doc.data()!;
+      final List<dynamic> sharedSubjects = data['subjects'];
+
+      for (var sJson in sharedSubjects) {
+        // Prevent duplicate names if desired, or just add them
+        await addSubject(
+          sJson['name'],
+          (sJson['targetAttendance'] as num).toDouble(),
+          List<int>.from(sJson['classDays']),
+          isWeekly: sJson['isWeekly'] ?? true,
+          dayTimings: Map<int, String>.from(sJson['dayTimings'] ?? {}),
+          reminderMinutes: sJson['reminderMinutes'],
+        );
+      }
+      return true;
+    } catch (e) {
+      debugPrint("Import error: $e");
+      return false;
+    }
+  }
+
   Future<void> _saveSubjects() async {
-    final prefs = await SharedPreferences.getInstance();
-    final String encoded = jsonEncode(
-      _subjects.map((s) => s.toJson()).toList(),
-    );
-    prefs.setString('subjects', encoded);
+    // Save locally
+    await _saveLocalData();
+    // Save to cloud
+    await _saveToFirestore();
   }
 }

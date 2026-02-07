@@ -23,14 +23,112 @@ class HomeScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'HI! ${provider.userName ?? ''}',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      color: Color(0xFF0A84FF),
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'HI! ${provider.userName ?? ''}',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Color(0xFF0A84FF),
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      if (provider.isAnonymous)
+                        Container(
+                          height: 32,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF0A84FF), Color(0xFF5AC8FA)],
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(
+                                  0xFF0A84FF,
+                                ).withValues(alpha: 0.3),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: TextButton.icon(
+                            onPressed: () => provider.signInWithGoogle(),
+                            icon: const Icon(
+                              Icons.cloud_upload,
+                              size: 14,
+                              color: Colors.white,
+                            ),
+                            label: const Text(
+                              'Backup Data',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
+                        )
+                      else
+                        GestureDetector(
+                          onTap: () => _showUserMenu(context, provider),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.1),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                CircleAvatar(
+                                  radius: 10,
+                                  backgroundColor: const Color(0xFF0A84FF),
+                                  backgroundImage:
+                                      provider.currentUser?.photoURL != null
+                                      ? NetworkImage(
+                                          provider.currentUser!.photoURL!,
+                                        )
+                                      : null,
+                                  child: provider.currentUser?.photoURL == null
+                                      ? const Icon(
+                                          Icons.person,
+                                          size: 12,
+                                          color: Colors.white,
+                                        )
+                                      : null,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  provider.currentUser?.displayName?.split(
+                                        ' ',
+                                      )[0] ??
+                                      'Account',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.white70,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ],
               ),
@@ -68,6 +166,22 @@ class HomeScreen extends StatelessWidget {
             ),
             actions: [
               IconButton(
+                icon: const Icon(
+                  CupertinoIcons.share,
+                  color: Colors.white70,
+                  size: 22,
+                ),
+                onPressed: () => _showShareDialog(context, provider),
+              ),
+              IconButton(
+                icon: const Icon(
+                  CupertinoIcons.square_grid_2x2,
+                  color: Colors.white70,
+                  size: 22,
+                ),
+                onPressed: () => _showImportDialog(context, provider),
+              ),
+              IconButton(
                 icon: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: const BoxDecoration(
@@ -82,7 +196,7 @@ class HomeScreen extends StatelessWidget {
                 ),
                 onPressed: () => Navigator.pushNamed(context, '/add'),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 8),
             ],
           ),
           // Today's Schedule Widget
@@ -210,6 +324,34 @@ class HomeScreen extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showUserMenu(BuildContext context, AttendanceProvider provider) {
+    showCupertinoModalPopup(
+      context: context,
+      builder: (context) => CupertinoActionSheet(
+        title: Text(provider.currentUser?.email ?? 'Account'),
+        message: const Text('Manage your account and synchronization'),
+        actions: [
+          CupertinoActionSheetAction(
+            onPressed: () {
+              Navigator.pop(context);
+              // Already synced, but can trigger manual sync
+              provider.signInWithGoogle();
+            },
+            child: const Text('Sync Now'),
+          ),
+        ],
+        cancelButton: CupertinoActionSheetAction(
+          isDestructiveAction: true,
+          onPressed: () {
+            Navigator.pop(context);
+            provider.signOut();
+          },
+          child: const Text('Sign Out'),
+        ),
       ),
     );
   }
@@ -383,6 +525,197 @@ class HomeScreen extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  void _showShareDialog(
+    BuildContext context,
+    AttendanceProvider provider,
+  ) async {
+    final code = await provider.generateShareCode();
+    if (!context.mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(30),
+        decoration: const BoxDecoration(
+          color: Color(0xFF1C1C1E),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[800],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 25),
+            const Text(
+              "Share Timetable",
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              "Share this code with your friends to instantly import your class schedule.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey[400]),
+            ),
+            const SizedBox(height: 30),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: const Color(0xFF0A84FF), width: 1),
+              ),
+              child: Text(
+                code,
+                style: const TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 8,
+                  color: Color(0xFF0A84FF),
+                ),
+              ),
+            ),
+            const SizedBox(height: 30),
+            SizedBox(
+              width: double.infinity,
+              height: 55,
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(CupertinoIcons.check_mark_circled),
+                label: const Text("Done"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0A84FF),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showImportDialog(BuildContext context, AttendanceProvider provider) {
+    final controller = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: Container(
+          padding: const EdgeInsets.all(30),
+          decoration: const BoxDecoration(
+            color: Color(0xFF1C1C1E),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[800],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 25),
+              const Text(
+                "Import Timetable",
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                "Enter the 6-digit code to import a friend's schedule.",
+                style: TextStyle(color: Colors.grey[400]),
+              ),
+              const SizedBox(height: 25),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  letterSpacing: 8,
+                ),
+                decoration: InputDecoration(
+                  counterText: "",
+                  filled: true,
+                  fillColor: Colors.black,
+                  hintText: "000000",
+                  hintStyle: TextStyle(
+                    color: Colors.grey[800],
+                    letterSpacing: 8,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(15),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 30),
+              SizedBox(
+                width: double.infinity,
+                height: 55,
+                child: ElevatedButton(
+                  onPressed: () async {
+                    if (controller.text.length == 6) {
+                      final success = await provider.importByShareCode(
+                        controller.text,
+                      );
+                      if (!context.mounted) return;
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            success
+                                ? "Timetable imported successfully!"
+                                : "Invalid or expired code.",
+                          ),
+                          backgroundColor: success ? Colors.green : Colors.red,
+                        ),
+                      );
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0A84FF),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                  ),
+                  child: const Text("Import Schedule"),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

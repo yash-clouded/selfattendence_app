@@ -328,7 +328,7 @@ class _EditSubjectScreenState extends State<EditSubjectScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
-                        'Is this a temporary class?',
+                        'Is this for the current semester only?',
                         style: TextStyle(fontSize: 16),
                       ),
                       CupertinoSwitch(
@@ -434,10 +434,14 @@ class _EditSubjectScreenState extends State<EditSubjectScreen> {
                       fontWeight: FontWeight.bold,
                     ),
                     underline: Container(),
-                    items: [0, 5, 10, 15, 30, 60].map((int value) {
+                    items: [-1, 0, 5, 10, 15, 30, 60].map((int value) {
                       return DropdownMenuItem<int>(
                         value: value,
-                        child: Text(value == 0 ? 'Exact time' : '$value mins'),
+                        child: Text(
+                          value == -1
+                              ? 'None'
+                              : (value == 0 ? 'Exact time' : '$value mins'),
+                        ),
                       );
                     }).toList(),
                     onChanged: (val) {

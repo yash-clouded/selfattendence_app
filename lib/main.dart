@@ -9,9 +9,12 @@ import 'screens/add_subject_screen.dart';
 import 'screens/subject_details_screen.dart';
 import 'screens/edit_subject_screen.dart';
 import 'screens/onboarding_screen.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await initializeDateFormatting();
   tz.initializeTimeZones();
   runApp(const MyApp());
@@ -22,7 +25,7 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
+    return ChangeNotifierProvider<AttendanceProvider>(
       create: (context) => AttendanceProvider(),
       child: Consumer<AttendanceProvider>(
         builder: (context, provider, child) {
@@ -31,7 +34,7 @@ class MyApp extends StatelessWidget {
           // For simplicity, we check if userName is null.
 
           Widget homeWidget;
-          if (provider.userName == null) {
+          if (provider.userName == null || provider.userName!.isEmpty) {
             homeWidget = const OnboardingScreen();
           } else {
             homeWidget = const HomeScreen();
