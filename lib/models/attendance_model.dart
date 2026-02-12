@@ -36,8 +36,8 @@ class Subject {
     this.dayTimings = const {},
     this.holidays = const [],
     this.reminderMinutes = 10,
-    this.calendarEventIds = const {},
-  });
+    Map<int, String>? calendarEventIds,
+  }) : calendarEventIds = calendarEventIds ?? {};
 
   int get attendedClasses => attendance.values.where((v) => v).length;
   int get totalClasses => attendance.length;
@@ -181,6 +181,8 @@ class AttendanceProvider extends ChangeNotifier {
   List<Subject> _subjects = [];
   String? _userName;
   final GoogleSignIn _googleSignIn = GoogleSignIn();
+  bool _isImporting =
+      false; // Flag to prevent listener interference during import
 
   List<Subject> get subjects => _subjects;
   String? get userName => _userName;
@@ -268,6 +270,12 @@ class AttendanceProvider extends ChangeNotifier {
         .doc(user.uid)
         .snapshots()
         .listen((snapshot) {
+          // Skip updates during import to prevent race condition
+          if (_isImporting) {
+            debugPrint("Firestore snapshot ignored (import in progress)");
+            return;
+          }
+
           debugPrint("Firestore snapshot received. Exists: ${snapshot.exists}");
           if (snapshot.exists) {
             final data = snapshot.data();
@@ -402,7 +410,12 @@ class AttendanceProvider extends ChangeNotifier {
 
     // Attempt to add to Device Calendar if timings provided
     if (dayTimings != null && dayTimings.isNotEmpty) {
-      await _addToDeviceCalendar(newSubject);
+      try {
+        await _addToDeviceCalendar(newSubject);
+      } catch (e) {
+        debugPrint("Calendar Add Error: $e");
+        // Don't rethrow, just log. Subject is added to app anyway.
+      }
     }
   }
 
@@ -624,6 +637,16 @@ class AttendanceProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> deleteAllSubjects() async {
+    // Remove all from calendar first
+    for (var subject in _subjects) {
+      await _removeFromDeviceCalendar(subject);
+    }
+    _subjects.clear();
+    await _saveSubjects();
+    notifyListeners();
+  }
+
   void addHoliday(String subjectId, DateTime date) {
     final index = _subjects.indexWhere((s) => s.id == subjectId);
     if (index == -1) return;
@@ -689,6 +712,15 @@ class AttendanceProvider extends ChangeNotifier {
   // --- Share Timetable Feature ---
 
   Future<String> generateShareCode() async {
+    // Ensure authenticated (even anonymously) before writing
+    if (currentUser == null) {
+      try {
+        await FirebaseAuth.instance.signInAnonymously();
+      } catch (e) {
+        throw Exception("Authentication failed: $e");
+      }
+    }
+
     final code = (100000 + (DateTime.now().millisecondsSinceEpoch % 900000))
         .toString();
 
@@ -700,25 +732,31 @@ class AttendanceProvider extends ChangeNotifier {
             'targetAttendance': s.targetAttendance,
             'classDays': s.classDays,
             'isWeekly': s.isWeekly,
-            'dayTimings': s.dayTimings,
+            'dayTimings': s.dayTimings.map((k, v) => MapEntry(k.toString(), v)),
             'reminderMinutes': s.reminderMinutes,
           },
         )
         .toList();
 
-    await FirebaseFirestore.instance
-        .collection('shared_timetables')
-        .doc(code)
-        .set({
-          'subjects': sharedData,
-          'createdBy': currentUser?.uid,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+    try {
+      await FirebaseFirestore.instance
+          .collection('shared_timetables')
+          .doc(code)
+          .set({
+            'subjects': sharedData,
+            'createdBy': currentUser?.uid,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+    } catch (e) {
+      debugPrint("Firestore write error: $e");
+      throw Exception("Cloud save failed. Check internet connection.");
+    }
 
     return code;
   }
 
   Future<bool> importByShareCode(String code) async {
+    _isImporting = true; // Lock to prevent Firestore listener interference
     try {
       final doc = await FirebaseFirestore.instance
           .collection('shared_timetables')
@@ -728,22 +766,84 @@ class AttendanceProvider extends ChangeNotifier {
 
       final data = doc.data()!;
       final List<dynamic> sharedSubjects = data['subjects'];
+      debugPrint("Found ${sharedSubjects.length} subjects in share code $code");
+
+      int successCount = 0;
+      bool listChanged = false;
 
       for (var sJson in sharedSubjects) {
-        // Prevent duplicate names if desired, or just add them
-        await addSubject(
-          sJson['name'],
-          (sJson['targetAttendance'] as num).toDouble(),
-          List<int>.from(sJson['classDays']),
-          isWeekly: sJson['isWeekly'] ?? true,
-          dayTimings: Map<int, String>.from(sJson['dayTimings'] ?? {}),
-          reminderMinutes: sJson['reminderMinutes'],
-        );
+        debugPrint("Processing subject: ${sJson['name']}");
+        try {
+          // Parse timings
+          Map<int, String> parsedTimings = {};
+          if (sJson['dayTimings'] != null) {
+            final rawTimings = sJson['dayTimings'] as Map<String, dynamic>;
+            parsedTimings = rawTimings.map(
+              (k, v) => MapEntry(int.parse(k), v.toString()),
+            );
+          }
+
+          // Duplicate check
+          final bool exists = _subjects.any((s) => s.name == sJson['name']);
+          if (exists) {
+            debugPrint("Subject ${sJson['name']} already exists. Skipping.");
+            continue;
+          }
+
+          // Create Subject
+          final newSubject = Subject(
+            id:
+                DateTime.now().toIso8601String() +
+                "_$successCount", // unique ID
+            name: sJson['name'],
+            targetAttendance: (sJson['targetAttendance'] as num).toDouble(),
+            classDays: List<int>.from(sJson['classDays']),
+            attendance: {},
+            notes: {},
+            isWeekly: sJson['isWeekly'] ?? true,
+            startDate: DateTime.now(),
+            dayTimings: parsedTimings,
+            holidays: [],
+            reminderMinutes: sJson['reminderMinutes'],
+          );
+
+          // Add to Local List
+          _subjects.add(newSubject);
+          listChanged = true;
+
+          // Add to Device Calendar (side effect, doesn't affect app state saving directly)
+          if (parsedTimings.isNotEmpty) {
+            try {
+              await _addToDeviceCalendar(newSubject);
+            } catch (e) {
+              debugPrint("Calendar Add Error for ${newSubject.name}: $e");
+            }
+          }
+
+          debugPrint("Successfully imported: ${sJson['name']}");
+          successCount++;
+        } catch (e) {
+          debugPrint("Failed to import subject ${sJson['name']}: $e");
+        }
       }
+
+      if (listChanged) {
+        // Save ONCE after all additions
+        await _saveSubjects();
+        notifyListeners();
+        debugPrint("Batch save complete. Total imported: $successCount");
+      } else {
+        debugPrint("No changes made (all duplicates or errors).");
+      }
+
       return true;
     } catch (e) {
       debugPrint("Import error: $e");
       return false;
+    } finally {
+      // Always unlock, even if import fails
+      _isImporting = false;
+      debugPrint("Import lock released");
     }
   }
 

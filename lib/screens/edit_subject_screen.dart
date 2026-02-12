@@ -293,17 +293,84 @@ class _EditSubjectScreenState extends State<EditSubjectScreen> {
                           _buildDayTimeRow(i, _getDayName(i)),
                       ],
                     )
-                  : SizedBox(
-                      height: 300,
-                      child: ListView.builder(
-                        itemCount: 31,
-                        itemBuilder: (context, index) {
-                          int day = index + 1;
-                          return _buildDayTimeRow(day, 'Day $day');
-                        },
-                      ),
+                  : Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((
+                              day,
+                            ) {
+                              return SizedBox(
+                                width: 30, // Approximate width of grid item
+                                child: Text(
+                                  day,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                        GridView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 7,
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                              ),
+                          itemCount:
+                              31 +
+                              (DateTime(
+                                    DateTime.now().year,
+                                    DateTime.now().month,
+                                    1,
+                                  ).weekday %
+                                  7),
+                          itemBuilder: (context, index) {
+                            final int firstDayOffset =
+                                DateTime(
+                                  DateTime.now().year,
+                                  DateTime.now().month,
+                                  1,
+                                ).weekday %
+                                7;
+                            if (index < firstDayOffset) {
+                              return Container();
+                            }
+                            return _buildGridDayCell(
+                              index - firstDayOffset + 1,
+                            );
+                          },
+                        ),
+                      ],
                     ),
             ),
+
+            if (!_isWeekly)
+              Padding(
+                padding: const EdgeInsets.only(top: 12, left: 4),
+                child: Row(
+                  children: [
+                    const Icon(
+                      CupertinoIcons.info,
+                      size: 14,
+                      color: Colors.grey,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Long press a date to select its time',
+                      style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
 
             const SizedBox(height: 30),
             Text(
@@ -472,6 +539,76 @@ class _EditSubjectScreenState extends State<EditSubjectScreen> {
               ),
             ),
             const SizedBox(height: 40),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGridDayCell(int day) {
+    bool isSelected = _selectedDays.contains(day);
+    bool hasTime = _dayTimes.containsKey(day);
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          if (isSelected) {
+            _selectedDays.remove(day);
+            _dayTimes.remove(day);
+          } else {
+            _selectedDays.add(day);
+          }
+        });
+      },
+      onLongPress: () async {
+        if (!isSelected) {
+          setState(() {
+            _selectedDays.add(day);
+          });
+        }
+        final TimeOfDay? picked = await showTimePicker(
+          context: context,
+          initialTime: _dayTimes[day] ?? const TimeOfDay(hour: 9, minute: 0),
+          builder: (context, child) {
+            return Theme(
+              data: ThemeData.dark().copyWith(
+                colorScheme: const ColorScheme.dark(primary: Color(0xFF0A84FF)),
+              ),
+              child: child!,
+            );
+          },
+        );
+        if (picked != null) {
+          setState(() {
+            _dayTimes[day] = picked;
+          });
+        }
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF0A84FF) : const Color(0xFF2C2C2E),
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: isSelected ? const Color(0xFF0A84FF) : Colors.transparent,
+            width: 2,
+          ),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              '$day',
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.grey,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+            if (hasTime)
+              Text(
+                '${_dayTimes[day]!.hour}:${_dayTimes[day]!.minute.toString().padLeft(2, '0')}',
+                style: const TextStyle(color: Colors.white70, fontSize: 8),
+              ),
           ],
         ),
       ),

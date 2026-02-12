@@ -343,6 +343,14 @@ class HomeScreen extends StatelessWidget {
             },
             child: const Text('Sync Now'),
           ),
+          CupertinoActionSheetAction(
+            isDestructiveAction: true,
+            onPressed: () {
+              Navigator.pop(context);
+              _confirmDeleteAll(context, provider);
+            },
+            child: const Text('Reset Timetable'),
+          ),
         ],
         cancelButton: CupertinoActionSheetAction(
           isDestructiveAction: true,
@@ -352,6 +360,32 @@ class HomeScreen extends StatelessWidget {
           },
           child: const Text('Sign Out'),
         ),
+      ),
+    );
+  }
+
+  void _confirmDeleteAll(BuildContext context, AttendanceProvider provider) {
+    showCupertinoDialog(
+      context: context,
+      builder: (ctx) => CupertinoAlertDialog(
+        title: const Text('Reset Timetable?'),
+        content: const Text(
+          'This will delete ALL subjects and attendance records. This cannot be undone.',
+        ),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.pop(ctx),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            child: const Text('Reset All'),
+            onPressed: () {
+              provider.deleteAllSubjects();
+              Navigator.pop(ctx);
+            },
+          ),
+        ],
       ),
     );
   }
@@ -534,82 +568,122 @@ class HomeScreen extends StatelessWidget {
     BuildContext context,
     AttendanceProvider provider,
   ) async {
-    final code = await provider.generateShareCode();
-    if (!context.mounted) return;
-
-    showModalBottomSheet(
+    // Show loading indicator
+    showDialog(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(30),
-        decoration: const BoxDecoration(
-          color: Color(0xFF1C1C1E),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[800],
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 25),
-            const Text(
-              "Share Timetable",
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              "Share this code with your friends to instantly import your class schedule.",
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[400]),
-            ),
-            const SizedBox(height: 30),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: BorderRadius.circular(15),
-                border: Border.all(color: const Color(0xFF0A84FF), width: 1),
-              ),
-              child: Text(
-                code,
-                style: const TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 8,
-                  color: Color(0xFF0A84FF),
+      barrierDismissible: false,
+      builder: (ctx) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final code = await provider.generateShareCode();
+      if (!context.mounted) return;
+      Navigator.pop(context); // Dismiss loading dialog
+
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: Colors.transparent,
+        builder: (context) => Container(
+          padding: const EdgeInsets.all(30),
+          decoration: const BoxDecoration(
+            color: Color(0xFF1C1C1E),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[800],
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
-            ),
-            const SizedBox(height: 30),
-            SizedBox(
-              width: double.infinity,
-              height: 55,
-              child: ElevatedButton.icon(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(CupertinoIcons.check_mark_circled),
-                label: const Text("Done"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF0A84FF),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(15),
+              const SizedBox(height: 25),
+              const Text(
+                "Share Timetable",
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                "Share this code with your friends to instantly import your class schedule.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey[400]),
+              ),
+              const SizedBox(height: 30),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 16,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: const Color(0xFF0A84FF), width: 1),
+                ),
+                child: SelectableText(
+                  // Changed to SelectableText for easier copying
+                  code,
+                  style: const TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 8,
+                    color: Color(0xFF0A84FF),
                   ),
                 ),
               ),
+              const SizedBox(height: 30),
+              SizedBox(
+                width: double.infinity,
+                height: 55,
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(
+                    CupertinoIcons.check_mark_circled,
+                    color: Colors.white,
+                  ),
+                  label: const Text(
+                    "Done",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0A84FF),
+                    foregroundColor:
+                        Colors.white, // Ensure ripple/text is white
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      Navigator.pop(context); // Dismiss loading dialog
+
+      // Show error dialog
+      showCupertinoDialog(
+        context: context,
+        builder: (ctx) => CupertinoAlertDialog(
+          title: const Text("Error"),
+          content: Text("Failed to generate share code: $e"),
+          actions: [
+            CupertinoDialogAction(
+              child: const Text("OK"),
+              onPressed: () => Navigator.pop(ctx),
             ),
           ],
         ),
-      ),
-    );
+      );
+    }
   }
 
   void _showImportDialog(BuildContext context, AttendanceProvider provider) {
@@ -688,11 +762,36 @@ class HomeScreen extends StatelessWidget {
                 child: ElevatedButton(
                   onPressed: () async {
                     if (controller.text.length == 6) {
+                      // Show loading indicator
+                      showDialog(
+                        context: context,
+                        barrierDismissible: false,
+                        builder: (ctx) =>
+                            const Center(child: CircularProgressIndicator()),
+                      );
+
                       final success = await provider.importByShareCode(
                         controller.text,
                       );
+
                       if (!context.mounted) return;
-                      Navigator.pop(context);
+                      Navigator.pop(context); // Dismiss loading dialog
+
+                      if (success) {
+                        Navigator.pop(
+                          context,
+                        ); // Dismiss bottom sheet only on success or let user retry?
+                        // Actually, if failed, maybe keep dialog open so they can try again?
+                        // Original code popped regardless. I'll keep it open on failure.
+                      } else {
+                        // If failed, we don't pop bottom sheet, just show error.
+                      }
+
+                      // If success is true, we popped bottom sheet. If false, we didn't.
+                      // But wait, the original code popped on ANY result.
+                      // "Navigator.pop(context);" was unconditional.
+                      // Let's make it conditional so they can retry without reopening.
+
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text(
@@ -707,11 +806,15 @@ class HomeScreen extends StatelessWidget {
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF0A84FF),
+                    foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(15),
                     ),
                   ),
-                  child: const Text("Import Schedule"),
+                  child: const Text(
+                    "Import Schedule",
+                    style: TextStyle(color: Colors.white),
+                  ),
                 ),
               ),
             ],

@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Shared timetables - allow anyone to read (for import feature)
+    // but only authenticated users can create them
+    match /shared_timetables/{code} {
+      allow read: if true;  // Anyone can import using a share code
+      allow create: if request.auth != null;  // Only authenticated users can share
+      allow update, delete: if false;  // Shared codes are immutable
+    }
+    
+    // User data - only the owner can read/write
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

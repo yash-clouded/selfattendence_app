@@ -1,1 +1,44 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"selfattendance-f846e","appId":"1:403069365842:android:1a640f0f319472de58798b","fileOutput":"android/app/google-services.json"}},"ios":{"default":{"projectId":"selfattendance-f846e","appId":"1:403069365842:ios:3149bdcbafb8b7c358798b","uploadDebugSymbols":false,"fileOutput":"ios/Runner/GoogleService-Info.plist"}},"macos":{"default":{"projectId":"selfattendance-f846e","appId":"1:403069365842:ios:3149bdcbafb8b7c358798b","uploadDebugSymbols":false,"fileOutput":"macos/Runner/GoogleService-Info.plist"}},"dart":{"lib/firebase_options.dart":{"projectId":"selfattendance-f846e","configurations":{"android":"1:403069365842:android:1a640f0f319472de58798b","ios":"1:403069365842:ios:3149bdcbafb8b7c358798b","macos":"1:403069365842:ios:3149bdcbafb8b7c358798b","web":"1:403069365842:web:7a1c49a1f28764c758798b","windows":"1:403069365842:web:a3c55f461ef4d38f58798b"}}}}}}
+{
+    "firestore": {
+        "rules": "firestore.rules"
+    },
+    "flutter": {
+        "platforms": {
+            "android": {
+                "default": {
+                    "projectId": "selfattendance-f846e",
+                    "appId": "1:403069365842:android:1a640f0f319472de58798b",
+                    "fileOutput": "android/app/google-services.json"
+                }
+            },
+            "ios": {
+                "default": {
+                    "projectId": "selfattendance-f846e",
+                    "appId": "1:403069365842:ios:3149bdcbafb8b7c358798b",
+                    "uploadDebugSymbols": false,
+                    "fileOutput": "ios/Runner/GoogleService-Info.plist"
+                }
+            },
+            "macos": {
+                "default": {
+                    "projectId": "selfattendance-f846e",
+                    "appId": "1:403069365842:ios:3149bdcbafb8b7c358798b",
+                    "uploadDebugSymbols": false,
+                    "fileOutput": "macos/Runner/GoogleService-Info.plist"
+                }
+            },
+            "dart": {
+                "lib/firebase_options.dart": {
+                    "projectId": "selfattendance-f846e",
+                    "configurations": {
+                        "android": "1:403069365842:android:1a640f0f319472de58798b",
+                        "ios": "1:403069365842:ios:3149bdcbafb8b7c358798b",
+                        "macos": "1:403069365842:ios:3149bdcbafb8b7c358798b",
+                        "web": "1:403069365842:web:7a1c49a1f28764c758798b",
+                        "windows": "1:403069365842:web:a3c55f461ef4d38f58798b"
+                    }
+                }
+            }
+        }
+    }
+}
